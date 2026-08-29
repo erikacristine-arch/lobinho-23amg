@@ -462,20 +462,32 @@ function aplicarRemoto(s,remote){
   ensure(s);
   let changed=false;
   let aprovados=0,recusados=0;
-  // Aprovados
+  // Aprovados — estava pending E voltou como checked
   Object.keys(remote.checked||{}).forEach(id=>{
-    if(s.pending[id]&&!s.completed[id]){s.completed[id]=true;delete s.pending[id];delete s.recusado[id];changed=true;aprovados++;}
+    if(s.pending[id]&&!s.completed[id]){
+      s.completed[id]=true;
+      delete s.pending[id];
+      delete s.recusado[id];
+      changed=true;
+      aprovados++;
+    }
   });
-  // Recusados (estava pending, não voltou como checked nem pending)
+  // Recusados — estava pending E não voltou como checked NEM pending (chefe colocou NAO)
   Object.keys(s.pending||{}).forEach(id=>{
     if(!remote.checked[id]&&!remote.pending[id]){
       delete s.pending[id];
-      s.recusado[id]=true; // marcar como recusado
-      changed=true;recusados++;
+      s.recusado[id]=true;
+      changed=true;
+      recusados++;
     }
   });
-  if(aprovados>0) setTimeout(()=>showToast('✅ '+aprovados+' atividade(s) aprovada(s) pelo chefe!','success'),200);
-  if(recusados>0) setTimeout(()=>showToast('❌ '+recusados+' atividade(s) não aprovada(s) pelo chefe.','error'),600);
+  // Mostrar toasts separados e corretos
+  if(aprovados>0&&recusados===0) setTimeout(()=>showToast('✅ '+aprovados+' atividade(s) aprovada(s) pelo chefe!','success'),200);
+  if(recusados>0&&aprovados===0) setTimeout(()=>showToast('❌ '+recusados+' atividade(s) não aprovada(s) pelo chefe.','error'),200);
+  if(aprovados>0&&recusados>0){
+    setTimeout(()=>showToast('✅ '+aprovados+' aprovada(s)','success'),200);
+    setTimeout(()=>showToast('❌ '+recusados+' não aprovada(s) pelo chefe.','error'),1200);
+  }
   Object.keys(remote.especialidades||{}).forEach(bid=>{
     if(!s.especialidades[bid])s.especialidades[bid]=[];
     (remote.especialidades[bid]||[]).forEach(re=>{
