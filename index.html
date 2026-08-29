@@ -1153,16 +1153,20 @@ function renderScoutBar(){
   document.getElementById('summaryMeta').textContent=(s.matilha||'—');
   document.getElementById('summaryModBadge').innerHTML=`<span class="mod-badge ${s.modalidade}">${MOD_LABELS[s.modalidade]||s.modalidade}</span>`;
   document.getElementById('sumBlocos').textContent=`${t} de 18 blocos concluídos`;
-  document.getElementById('sumEtapa').textContent='Etapa: '+ed.label;
+  document.getElementById('sumEtapa').textContent='Etapa: '+(ed?ed.label:'Pata Tenra');
   const badge=document.getElementById('sumEtapaBadge');
   badge.innerHTML=`<img src="${ed.img}" style="width:18px;height:18px;object-fit:contain;border-radius:4px;vertical-align:middle;margin-right:4px;">${ed.label}`;
   badge.style.background=ed.cor+'22';badge.style.color=ed.cor;
-  const pct=Math.round((t/18)*100);
-  document.getElementById('bigBarFill').style.width=pct+'%';
-  document.getElementById('sumLabel').textContent=t+' blocos concluídos';
-  document.getElementById('sumPct').textContent=pct+'%';
+  const pct=t>0?Math.round((t/18)*100):0;
+  const barEl=document.getElementById('bigBarFill');
+  if(barEl) barEl.style.width=pct+'%';
+  const lblEl=document.getElementById('sumLabel');
+  if(lblEl) lblEl.textContent=t+' blocos concluídos';
+  const pctEl=document.getElementById('sumPct');
+  if(pctEl) pctEl.textContent=pct+'%';
   renderEtapaSteps(t,etapa);
   if(lastSync) setSyncStatus('ok','Sincronizado '+lastSync.toLocaleTimeString('pt-BR'));
+  else if(!sheetsUrl) setSyncStatus('ok','Sem planilha configurada');
 }
 function calcAge(b){if(!b)return'?';return Math.floor((Date.now()-new Date(b).getTime())/(1000*60*60*24*365.25));}
 function renderEtapaSteps(total,etapaAtual){
@@ -1189,8 +1193,9 @@ function isBlocoDone(s,bid){
   const fixas=filtrarAcoes(b.fixas,mod);
   // fixas: só conta se completed (aprovada)
   for(const f of fixas) if(!s.completed[f.id])return false;
+  ensure(s);
   const espsArr=s.especialidades[bid]||[];
-  const ed=espsArr.filter(e=>typeof e==='string'?true:e.done).length;
+  const ed=espsArr.filter(e=>e.done).length;
   if(ed>0) return true;
   const vars=filtrarAcoes(b.variaveis,mod);
   // variáveis: só conta completed, não pending
@@ -1198,7 +1203,7 @@ function isBlocoDone(s,bid){
   const cd=(s.escolhas[bid]||[]).filter(e=>e.done).length;
   return(vd+cd)>=b.varQtd;
 }
-function countDone(s){return BLOCOS.filter(b=>isBlocoDone(s,b.id)).length;}
+function countDone(s){ensure(s);return BLOCOS.filter(b=>isBlocoDone(s,b.id)).length;}
 function getEtapa(n,entry){
   if(n>=18)return'cruzeiro';if(n>=13)return'cacador';
   if(n>=8)return'rastreador';if(n>=4)return'saltador';
