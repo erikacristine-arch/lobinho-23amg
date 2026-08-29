@@ -174,6 +174,10 @@ body{font-family:"Nunito Sans",sans-serif;background:var(--fundo);color:var(--te
 .atividade-item.pendente .ativ-checkbox{background:#FEF3C7;border-color:#F59E0B;}
 .atividade-item.pendente .ativ-texto{color:#92400E;}
 .pendente-badge{font-size:10px;font-weight:800;color:#92400E;background:#FEF3C7;border:1px solid #F59E0B;border-radius:10px;padding:1px 7px;margin-top:4px;display:inline-block;}
+.atividade-item.recusada{background:#FFEBEE;border-color:#EF5350;}
+.atividade-item.recusada .ativ-checkbox{background:#FFCDD2;border-color:#EF5350;}
+.atividade-item.recusada .ativ-texto{color:#B71C1C;text-decoration:line-through;}
+.recusada-badge{font-size:10px;font-weight:800;color:#B71C1C;background:#FFCDD2;border:1px solid #EF5350;border-radius:10px;padding:1px 7px;margin-top:4px;display:inline-block;}
 .ativ-mod-badge{display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:800;padding:2px 7px;border-radius:20px;margin-top:4px;}
 .ativ-mod-badge.ar{background:#E3F2FD;color:#1565C0;}
 .ativ-mod-badge.mar{background:#E0F7FA;color:#006064;}
@@ -364,6 +368,7 @@ function save(){localStorage.setItem('alcateia_baleia_v2',JSON.stringify(scouts)
 function ensure(s){
   if(!s.completed)s.completed={};
   if(!s.pending)s.pending={};
+  if(!s.recusado)s.recusado={};
   if(!s.especialidades)s.especialidades={};
   if(!s.escolhas)s.escolhas={};
   Object.keys(s.especialidades).forEach(bid=>{
@@ -404,40 +409,73 @@ async function doLogin(){
   if(!reg||!name){showToast('Informe o registro e o nome.','error');return;}
   if(!setupMod){showToast('Selecione a modalidade.','error');return;}
   if(url){sheetsUrl=url;localStorage.setItem('alcateia_sheetsUrl',sheetsUrl);}
+
+  // SEMPRE busca na planilha pelo número de registro (fonte da verdade)
   let remote=null;
-  if(sheetsUrl){showLoading('Buscando na planilha...');remote=await fetchFromSheets(reg);hideLoading();}
-  let s=scouts.find(x=>x.registro===reg);
+  if(sheetsUrl){
+    showLoading('Buscando dados na planilha...');
+    remote=await fetchFromSheets(reg);
+    hideLoading();
+  }
+
+  // Criar ou recuperar scout — ignora localStorage se a planilha respondeu
+  let s;
   if(remote&&remote.ok&&remote.encontrado){
+    // Planilha tem dados — ignorar localStorage, usar dados remotos
+    s=scouts.find(x=>x.registro===reg);
     if(!s){s={id:'l'+Date.now(),registro:reg,name:remote.meta.nome||name,matilha:remote.meta.matilha||matilha,modalidade:setupMod,entryEtapa:'patatenra',completed:{},pending:{},especialidades:{},escolhas:{}};scouts.push(s);}
-    ensure(s);
-    Object.keys(remote.checked||{}).forEach(id=>{s.completed[id]=true;delete s.pending[id];});
-    Object.keys(remote.pending||{}).forEach(id=>{if(!s.completed[id])s.pending[id]=true;});
-    if(remote.matilha)s.matilha=remote.meta.matilha||matilha;
+    else{s.name=remote.meta.nome||name;s.matilha=remote.meta.matilha||matilha;}
     s.modalidade=setupMod;
+    ensure(s);
+    // Aplicar dados remotos completamente
+    s.completed={};s.pending={};
+    Object.keys(remote.checked||{}).forEach(id=>{s.completed[id]=true;});
+    Object.keys(remote.pending||{}).forEach(id=>{s.pending[id]=true;});
     aplicarRemoto(s,remote);
-    save();currentId=s.id;showToast('Dados carregados da planilha! ☁️','success');
-  }else{
+    save();currentId=s.id;
+    showToast('Dados carregados da planilha! ☁️','success');
+  } else {
+    // Sem planilha ou não encontrado — criar novo
+    s=scouts.find(x=>x.registro===reg);
     if(s){
-      // Atualizar modalidade e matilha se o lobinho mudou na tela
-      if(setupMod) s.modalidade=setupMod;
-      if(matilha) s.matilha=matilha;
-      ensure(s);save();
-      currentId=s.id;showToast('Bem-vindo(a) de volta, '+s.name.split(' ')[0]+'!','success');
+      if(setupMod)s.modalidade=setupMod;
+      if(matilha)s.matilha=matilha;
+      ensure(s);
     } else {
       s={id:'l'+Date.now(),registro:reg,name,matilha,modalidade:setupMod||'basico',
          entryEtapa:'patatenra',completed:{},pending:{},especialidades:{},escolhas:{}};
-      scouts.push(s);save();currentId=s.id;
-      showToast('Novo lobinho: '+name.split(' ')[0]+'!','success');
+      scouts.push(s);
     }
+    save();currentId=s.id;
+    showToast('Bem-vindo(a), '+name.split(' ')[0]+'!','success');
   }
+
+  // Salvar imediatamente na planilha ao entrar (novo cadastro)
+  if(sheetsUrl&&remote&&!remote.encontrado){
+    setTimeout(()=>pushToSheets(getS()),500);
+  }
+
   launchApp();
 }
 
 function aplicarRemoto(s,remote){
   ensure(s);
   let changed=false;
-  Object.keys(remote.checked||{}).forEach(id=>{if(s.pending[id]&&!s.completed[id]){s.completed[id]=true;delete s.pending[id];changed=true;}} );
-  Object.keys(s.pending||{}).forEach(id=>{if(!remote.checked[id]&&!remote.pending[id]){delete s.pending[id];changed=true;}} );
+  let aprovados=0,recusados=0;
+  // Aprovados
+  Object.keys(remote.checked||{}).forEach(id=>{
+    if(s.pending[id]&&!s.completed[id]){s.completed[id]=true;delete s.pending[id];delete s.recusado[id];changed=true;aprovados++;}
+  });
+  // Recusados (estava pending, não voltou como checked nem pending)
+  Object.keys(s.pending||{}).forEach(id=>{
+    if(!remote.checked[id]&&!remote.pending[id]){
+      delete s.pending[id];
+      s.recusado[id]=true; // marcar como recusado
+      changed=true;recusados++;
+    }
+  });
+  if(aprovados>0) setTimeout(()=>showToast('✅ '+aprovados+' atividade(s) aprovada(s) pelo chefe!','success'),200);
+  if(recusados>0) setTimeout(()=>showToast('❌ '+recusados+' atividade(s) não aprovada(s) pelo chefe.','error'),600);
   Object.keys(remote.especialidades||{}).forEach(bid=>{
     if(!s.especialidades[bid])s.especialidades[bid]=[];
     (remote.especialidades[bid]||[]).forEach(re=>{
@@ -470,10 +508,13 @@ async function launchApp(){
     setSyncStatus('ing','Buscando aprovações...');
     const remote=await fetchFromSheets(s.registro);
     if(remote&&remote.ok&&remote.encontrado){
+      // Aplicar aprovações do chefe
       const changed=aplicarRemoto(s,remote);
       if(changed){save();renderScoutBar();buildEixoTabs();renderBlocos();}
       setSyncStatus('ok','Atualizado '+new Date().toLocaleTimeString('pt-BR'));
-    }else{setSyncStatus('ok','Pronto');}
+    }else{
+      setSyncStatus('ok','Pronto');
+    }
     startPolling();
   }
 }
@@ -519,8 +560,8 @@ function buildPayload(s){
       const variaveis=filtrarAcoes(b.variaveis,s.modalidade);
       blocos_eixo[b.id]={
         nome:b.nome,
-        fixas:fixas.map(a=>{return{id:a.id,nome:a.t,modal:a.mod||'',feita:s.completed[a.id]?'SIM':(s.pending[a.id]?'PENDENTE':'NAO')}}),
-        variaveis:variaveis.map(a=>{return{id:a.id,nome:a.t,modal:a.mod||'',feita:s.completed[a.id]?'SIM':(s.pending[a.id]?'PENDENTE':'NAO')}}),
+        fixas:fixas.map(a=>{return{id:a.id,nome:a.t,modal:a.mod||'',feita:s.completed[a.id]?'SIM':(s.pending[a.id]?'PENDENTE':(s.recusado[a.id]?'NAO':'NAO'))}}),
+        variaveis:variaveis.map(a=>{return{id:a.id,nome:a.t,modal:a.mod||'',feita:s.completed[a.id]?'SIM':(s.pending[a.id]?'PENDENTE':(s.recusado[a.id]?'NAO':'NAO'))}}),
         especialidades:(s.especialidades[b.id]||[]),
         escolhas:(s.escolhas[b.id]||[]),
       };
@@ -554,7 +595,7 @@ async function syncAuto(){
     document.getElementById('syncIcon').textContent='☁️';
     if(ok){lastSync=new Date();setSyncStatus('ok','Salvo às '+lastSync.toLocaleTimeString('pt-BR'));}
     else{setSyncStatus('err','Erro — verifique a URL');}
-  },1500);
+  },800);
 }
 
 async function syncNow(){
@@ -587,9 +628,9 @@ async function startPolling(){
       const openCard=document.querySelector('.bloco-card.open');
       if(openCard){const bid=openCard.id.replace('card-','');refreshCard(bid);const body=document.getElementById('body-'+bid);if(body&&body.innerHTML)buildBody(bid,body);}
       renderBlocos();
-      showToast('✅ Atividade aprovada pelo chefe!','success');
+      // toast já mostrado em aplicarRemoto
     }
-  },90000);
+  },30000);
 }
 
 function setSyncStatus(state,text){
@@ -840,19 +881,22 @@ function buildBody(bid,container){
 function buildAtiv(a,ec,s){
   const isChecked=!!s.completed[a.id];
   const isPending=!isChecked&&!!s.pending[a.id];
-  const cls=isChecked?'checked':(isPending?'pendente':'');
+  const isRecusado=!isChecked&&!isPending&&!!s.recusado[a.id];
+  const cls=isChecked?'checked':(isPending?'pendente':(isRecusado?'recusada':''));
   let modBadge='';
   if(a.mod==='ar') modBadge='<span class="ativ-mod-badge ar">✈️ Lobinho do Ar</span>';
   if(a.mod==='mar') modBadge='<span class="ativ-mod-badge mar">⛵ Lobinho do Mar</span>';
   const pendBadge=isPending?'<span class="pendente-badge">⏳ Aguardando aprovação do chefe</span>':'';
-  const chkStyle=isChecked?`background:${ec.dark};border-color:${ec.dark};`:'';
+  const recBadge=isRecusado?'<span class="recusada-badge">❌ Não aprovada pelo chefe — tente novamente</span>':'';
+  const chkStyle=isChecked?`background:${ec.dark};border-color:${ec.dark};`:isRecusado?'background:#FFCDD2;border-color:#EF5350;':'';
   const itemStyle=isChecked?`background:${ec.light};border-color:${ec.mid};`:'';
   const txtStyle=isChecked?`color:${ec.dark};`:'';
+  const chkIcon=isChecked?'✓':(isPending?'⏳':(isRecusado?'✕':''));
   return `<div class="atividade-item ${cls}" data-id="${a.id}" style="${itemStyle}">
-    <div class="ativ-checkbox" style="${chkStyle}"><span class="ativ-check-icon">✓</span>${isPending?'⏳':''}</div>
+    <div class="ativ-checkbox" style="${chkStyle}"><span class="ativ-check-icon" style="${isRecusado?'display:block;color:#B71C1C;':''}">${isChecked?'✓':''}${isPending?'⏳':''}${isRecusado?'✕':''}</span></div>
     <div class="ativ-info">
       <div class="ativ-texto" style="${txtStyle}">${a.t}</div>
-      ${modBadge||pendBadge?`<div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap;">${modBadge}${pendBadge}</div>`:''}
+      ${modBadge||pendBadge||recBadge?`<div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap;">${modBadge}${pendBadge}${recBadge}</div>`:''}
     </div>
   </div>`;
 }
@@ -860,9 +904,21 @@ function buildAtiv(a,ec,s){
 
 function toggleAtiv(aid,bid){
   const s=getS();ensure(s);
-  if(s.completed[aid]){delete s.completed[aid];delete s.pending[aid];showToast('Ação desmarcada');}
-  else if(s.pending[aid]){delete s.pending[aid];showToast('⏳ Solicitação cancelada');}
-  else{s.pending[aid]=true;showToast('⏳ Enviado para aprovação do chefe!','info');}
+  if(s.completed[aid]){
+    delete s.completed[aid];delete s.pending[aid];delete s.recusado[aid];
+    showToast('Ação desmarcada');
+  } else if(s.pending[aid]){
+    delete s.pending[aid];
+    showToast('⏳ Solicitação cancelada');
+  } else if(s.recusado[aid]){
+    // Reenviar para aprovação após recusa
+    delete s.recusado[aid];
+    s.pending[aid]=true;
+    showToast('⏳ Reenviado para aprovação do chefe!','info');
+  } else {
+    s.pending[aid]=true;
+    showToast('⏳ Enviado para aprovação do chefe!','info');
+  }
   save();syncAuto();
   refreshCard(bid);
   const body=document.getElementById('body-'+bid);
@@ -960,15 +1016,15 @@ function hideLoading(){document.getElementById('loadingOverlay').style.display='
 
 load();
 window.addEventListener('DOMContentLoaded',()=>{
-  if(sheetsUrl)document.getElementById('inputSheetsUrl').value=sheetsUrl;
+  const urlField=document.getElementById('inputSheetsUrl');
+  if(urlField&&sheetsUrl)urlField.value=sheetsUrl;
   const last=localStorage.getItem('alcateia_last');
   if(last){
     try{
       const l=JSON.parse(last);
       const s=scouts.find(x=>x.id===l.id);
-      if(s&&confirm('Retomar sessão de '+l.name+'?')){
+      if(s){
         currentId=s.id;
-        // Garantir que setupMod está setado com a modalidade salva
         setupMod=s.modalidade||'basico';
         ensure(s);
         launchApp();
