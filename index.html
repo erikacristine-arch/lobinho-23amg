@@ -917,29 +917,7 @@ async function launchApp(){
     setSyncStatus('ing','Buscando atualizações...');
     const remote=await fetchFromSheets(s.registro);
     if(remote&&remote.ok&&remote.encontrado){
-      let changed=false;
-      Object.keys(remote.checked||{}).forEach(id=>{
-        if(s.pending[id]&&!s.completed[id]){s.completed[id]=true;delete s.pending[id];changed=true;}
-      });
-      Object.keys(s.pending||{}).forEach(id=>{
-        if(!remote.checked[id]&&!remote.pending[id]){delete s.pending[id];changed=true;}
-      });
-      Object.keys(remote.especialidades||{}).forEach(bid=>{
-        (remote.especialidades[bid]||[]).forEach(re=>{
-          if(!s.especialidades[bid])s.especialidades[bid]=[];
-          const local=s.especialidades[bid].find(e=>(typeof e==='object'?e.texto:e)===re.texto);
-          if(local&&typeof local==='object'&&local.pending&&re.done){local.done=true;local.pending=false;changed=true;}
-        });
-      });
-      Object.keys(remote.escolhas||{}).forEach(bid=>{
-        (remote.escolhas[bid]||[]).forEach((re,i)=>{
-          if(s.escolhas[bid]&&s.escolhas[bid][i]){
-            const l=s.escolhas[bid][i];
-            if(l.pending&&re.done){l.done=true;l.pending=false;changed=true;}
-            else if(l.pending&&!re.done&&!re.pending){l.pending=false;changed=true;}
-          }
-        });
-      });
+      const changed=aplicarRemoto(s,remote);
       if(changed){save();renderScoutBar();buildEixoTabs();renderBlocos();}
       setSyncStatus('ok','Atualizado '+new Date().toLocaleTimeString('pt-BR'));
     } else {
@@ -1059,12 +1037,11 @@ async function syncNow(){
   }
 }
 
-// Sync automático em background — não bloqueia UI, sem toasts
+// ── SYNC AUTOMÁTICO ──────────────────────────────────────────────────────
 let syncTimer=null;
 async function syncAuto(){
   const s=getS();if(!s||!sheetsUrl)return;
   clearTimeout(syncTimer);
-  // Debounce: espera 2s após última ação para não sincronizar a cada clique
   syncTimer=setTimeout(async()=>{
     setSyncStatus('ing','Salvando...');
     document.getElementById('syncIcon').textContent='🔄';
@@ -1072,72 +1049,89 @@ async function syncAuto(){
     document.getElementById('syncIcon').textContent='☁️';
     if(ok){
       lastSync=new Date();
-      setSyncStatus('ok','Salvo '+lastSync.toLocaleTimeString('pt-BR'));
+      setSyncStatus('ok','Salvo às '+lastSync.toLocaleTimeString('pt-BR'));
     } else {
-      setSyncStatus('err','Erro ao salvar');
+      setSyncStatus('err','Erro — verifique a URL');
     }
-  },2000);
+  },1500);
 }
 
-// Polling: busca aprovações do chefe a cada 90 segundos
+// ── APLICAR DADOS DO SHEETS NO SCOUT LOCAL ────────────────────────────────
+function aplicarRemoto(s, remote){
+  ensure(s);
+  let changed=false;
+
+  // Ações fixas/variáveis
+  Object.keys(remote.checked||{}).forEach(id=>{
+    if(s.pending[id] && !s.completed[id]){
+      s.completed[id]=true;
+      delete s.pending[id];
+      changed=true;
+    }
+  });
+  // Recusadas pelo chefe (estava pending, não voltou como checked nem pending)
+  Object.keys(s.pending||{}).forEach(id=>{
+    if(!remote.checked[id] && !remote.pending[id]){
+      delete s.pending[id];
+      changed=true;
+    }
+  });
+
+  // Especialidades
+  Object.keys(remote.especialidades||{}).forEach(bid=>{
+    if(!s.especialidades[bid]) s.especialidades[bid]=[];
+    ensure(s); // garante normalização
+    (remote.especialidades[bid]||[]).forEach(re=>{
+      const local=s.especialidades[bid].find(e=>e.texto===re.texto);
+      if(local){
+        if(local.pending && re.done){local.done=true;local.pending=false;changed=true;}
+        else if(local.pending && !re.done && !re.pending){local.pending=false;changed=true;}
+      }
+    });
+  });
+
+  // Escolhas do lobinho
+  Object.keys(remote.escolhas||{}).forEach(bid=>{
+    if(!s.escolhas[bid]) s.escolhas[bid]=[];
+    (remote.escolhas[bid]||[]).forEach((re,i)=>{
+      const local=s.escolhas[bid] && s.escolhas[bid][i];
+      if(!local) return;
+      if(local.pending && re.done){local.done=true;local.pending=false;changed=true;}
+      else if(local.pending && !re.done && !re.pending){local.pending=false;changed=true;}
+    });
+  });
+
+  return changed;
+}
+
+// ── POLLING: verifica aprovações a cada 90s ───────────────────────────────
 let pollInterval=null;
 async function startPolling(){
   if(!sheetsUrl)return;
   if(pollInterval)clearInterval(pollInterval);
   pollInterval=setInterval(async()=>{
     const s=getS();if(!s)return;
+    // Não busca enquanto está sincronizando
+    if(document.getElementById('syncIcon').textContent==='🔄')return;
     const remote=await fetchFromSheets(s.registro);
     if(!remote||!remote.ok||!remote.encontrado)return;
-    // Verificar se houve aprovações novas
-    let changed=false;
-    // Checar ações que estavam pending e agora são SIM
-    Object.keys(remote.checked||{}).forEach(id=>{
-      if(s.pending[id]&&!s.completed[id]){
-        s.completed[id]=true;
-        delete s.pending[id];
-        changed=true;
-      }
-    });
-    // Checar ações que eram SIM e chefe recusou (NAO)
-    Object.keys(s.pending||{}).forEach(id=>{
-      if(!remote.checked[id]&&!remote.pending[id]){
-        delete s.pending[id];
-        changed=true;
-      }
-    });
-    // Especialidades aprovadas
-    Object.keys(remote.especialidades||{}).forEach(bid=>{
-      (remote.especialidades[bid]||[]).forEach(re=>{
-        if(!s.especialidades[bid])s.especialidades[bid]=[];
-        const local=s.especialidades[bid].find(e=>(typeof e==='object'?e.texto:e)===re.texto);
-        if(local&&typeof local==='object'&&local.pending&&re.done){
-          local.done=true;local.pending=false;changed=true;
-        }
-      });
-    });
-    // Escolhas aprovadas
-    Object.keys(remote.escolhas||{}).forEach(bid=>{
-      (remote.escolhas[bid]||[]).forEach((re,i)=>{
-        if(s.escolhas[bid]&&s.escolhas[bid][i]){
-          const local=s.escolhas[bid][i];
-          if(local.pending&&re.done){local.done=true;local.pending=false;changed=true;}
-          else if(local.pending&&!re.done&&!re.pending){local.pending=false;changed=true;}
-        }
-      });
-    });
+    const changed=aplicarRemoto(s,remote);
     if(changed){
       save();
-      renderScoutBar();buildEixoTabs();
-      // Reabrir bloco aberto se houver
+      renderScoutBar();
+      buildEixoTabs();
+      // Atualizar bloco aberto
       const openCard=document.querySelector('.bloco-card.open');
       if(openCard){
         const bid=openCard.id.replace('card-','');
+        refreshCard(bid);
         const body=document.getElementById('body-'+bid);
-        if(body)buildBody(bid,body);
+        if(body&&body.innerHTML)buildBody(bid,body);
       }
+      renderBlocos();
       showToast('✅ Atividade aprovada pelo chefe!','success');
     }
-  },90000); // 90 segundos
+  },90000);
 }
 
 function setSyncStatus(state,text){
@@ -1416,7 +1410,7 @@ function toggleAtiv(aid,bid){
     s.pending[aid]=true;
     showToast('⏳ Enviado para aprovação do chefe!','info');
   }
-  save();
+  save();syncAuto();
   refreshCard(bid);
   const body=document.getElementById('body-'+bid);
   if(body&&body.innerHTML)buildBody(bid,body);
